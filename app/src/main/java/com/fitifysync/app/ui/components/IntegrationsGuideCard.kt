@@ -6,7 +6,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -18,8 +17,10 @@ fun IntegrationsGuideCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -30,13 +31,14 @@ fun IntegrationsGuideCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Automated Background Sync",
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.bodyMedium
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "Syncs new Fitify sessions in the background every 6 hours",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 }
                 Switch(
@@ -47,22 +49,22 @@ fun IntegrationsGuideCard(
 
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = 12.dp),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
             )
 
             Text(
-                text = "How Samsung Health & Google Fit Receive Data:",
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyMedium
+                text = "Ecosystem Integration Bridge",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "• Samsung Health: Open Samsung Health → Settings → Health Connect → Allow read & write.\n" +
-                        "• Google Fit: Open Google Fit → Settings → Sync with Health Connect → Turn On.\n" +
-                        "• Detailed Analysis: Health Connect automatically feeds full exercise duration, type, and active calories to both platforms.",
+                text = "• Samsung Health: Open Settings → Health Connect → Allow Read & Write.\n" +
+                        "• Google Fit: Open Settings → Sync with Health Connect → Turn On.\n" +
+                        "• Full Metrics: Bi-directional sync maps exercise segments, calories, and Heart Rate across all connected devices.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                lineHeight = MaterialTheme.typography.bodySmall.lineHeight
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
             )
         }
     }

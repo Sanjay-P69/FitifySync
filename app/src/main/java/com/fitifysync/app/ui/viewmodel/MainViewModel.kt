@@ -3,12 +3,16 @@ package com.fitifysync.app.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.fitifysync.app.data.model.FitifyWorkout
 import com.fitifysync.app.data.repository.DefaultFitifySyncRepository
 import com.fitifysync.app.data.repository.FitifySyncRepository
 import com.fitifysync.app.ui.state.UiEvent
 import com.fitifysync.app.ui.state.UiState
+import com.fitifysync.app.ui.state.WorkoutStats
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -19,16 +23,17 @@ class MainViewModel(
     private val repository: FitifySyncRepository
 ) : AndroidViewModel(application) {
 
+    // Secondary constructor for default Android ViewModelProvider.Factory
     constructor(application: Application) : this(
         application,
         DefaultFitifySyncRepository(application)
     )
 
     private val _uiState = MutableStateFlow(UiState())
-    val uiState = _uiState.asStateFlow()
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private val _events = MutableSharedFlow<UiEvent>()
-    val events = _events.asSharedFlow()
+    val events: SharedFlow<UiEvent> = _events.asSharedFlow()
 
     fun initChecks() {
         viewModelScope.launch {
@@ -95,10 +100,12 @@ class MainViewModel(
 
             result.onSuccess { pair ->
                 val (workouts, summary) = pair
+                val computedStats = computeStats(workouts)
                 _uiState.update {
                     it.copy(
                         isSyncing = false,
                         workouts = workouts,
+                        stats = computedStats,
                         statusMessage = if (summary.errorMessage != null) {
                             "Sync partial/error: ${summary.errorMessage}"
                         } else {
@@ -116,6 +123,17 @@ class MainViewModel(
                 }
                 _events.emit(UiEvent.ShowToast("Sync error: ${error.localizedMessage}", isLong = true))
             }
+        }
+    }
+
+    fun toggleWorkoutExpansion(workoutId: String) {
+        _uiState.update { current ->
+            val updated = if (current.expandedWorkoutIds.contains(workoutId)) {
+                current.expandedWorkoutIds - workoutId
+            } else {
+                current.expandedWorkoutIds + workoutId
+            }
+            current.copy(expandedWorkoutIds = updated)
         }
     }
 
@@ -146,5 +164,23 @@ class MainViewModel(
                 )
             )
         }
+    }
+
+    private fun computeStats(workouts: List<FitifyWorkout>): WorkoutStats {
+        if (workouts.isEmpty()) return WorkoutStats()
+        val totalDuration = workouts.sumOf { it.durationSeconds }
+        val totalCalories = workouts.sumOf { it.caloriesBurned }
+        val hrList = workouts.mapNotNull { it.avgHeartRate }
+        val avgHr = if (hrList.isNotEmpty()) hrList.average().toInt() else null
+        val minHr = workouts.mapNotNull { it.minHeartRate }.minOrNull()
+        val maxHr = workouts.mapNotNull { it.maxHeartRate }.maxOrNull()
+        return WorkoutStats(
+            totalSessions = workouts.size,
+            totalDurationSeconds = totalDuration,
+            totalCalories = totalCalories,
+            avgHeartRate = avgHr,
+            minHeartRate = minHr,
+            maxHeartRate = maxHr
+        )
     }
 }
