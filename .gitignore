@@ -1,0 +1,24 @@
+*.iml
+.gradle
+/local.properties
+local.properties
+/.idea
+.idea/
+.DS_Store
+/build
+build/
+app/build/
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+*.keystore
+*.jks
+__pycache__/
+
+# Root temporary test dumps and screen captures
+/*.xml
+/*.png
+/*.db
+/*.csv

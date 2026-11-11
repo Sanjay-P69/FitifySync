@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.fitifysync.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.fitifysync.app"
@@ -74,4 +74,7 @@ dependencies {
     // Coroutines & Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // Unit Testing
+    testImplementation("junit:junit:4.13.2")
 }

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Top Sync Arc & Arrow -->
+    <path
+        android:pathData="M 33,48 A 24,24 0 0,1 75,44"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M 72,36 L 79,44 L 69,47 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- Bottom Sync Arc & Arrow -->
+    <path
+        android:pathData="M 75,60 A 24,24 0 0,1 33,64"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M 36,72 L 29,64 L 39,61 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- Modern Dynamic Dumbbell rotated 45 degrees -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:rotation="45">
+
+        <!-- Bar handle -->
+        <path
+            android:pathData="M 40,54 L 68,54"
+            android:strokeColor="#F8FAFC"
+            android:strokeWidth="4"
+            android:strokeLineCap="round" />
+
+        <!-- Left Inner Plate -->
+        <path
+            android:pathData="M 40,46 L 40,62"
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round" />
+
+        <!-- Left Outer Main Plate -->
+        <path
+            android:pathData="M 35,43 L 35,65"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="4.5"
+            android:strokeLineCap="round" />
+
+        <!-- Right Inner Plate -->
+        <path
+            android:pathData="M 68,46 L 68,62"
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round" />
+
+        <!-- Right Outer Main Plate -->
+        <path
+            android:pathData="M 73,43 L 73,65"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="4.5"
+            android:strokeLineCap="round" />
+
+        <!-- Core Energy Indicator -->
+        <path
+            android:pathData="M54,54m-3,0a3,3 0 1,1 6,0a3,3 0 1,1 -6,0"
+            android:fillColor="#00E5FF" />
+    </group>
+</vector>

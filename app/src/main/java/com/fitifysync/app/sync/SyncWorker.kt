@@ -38,14 +38,14 @@ class SyncWorker(
             return@withContext Result.retry()
         }
 
-        val dbFile = dumpResult.getOrThrow()
+        val dumpDir = dumpResult.getOrThrow()
 
         // 3. Parse workout sessions
-        val workouts = FitifyDatabaseParser.parseWorkouts(dbFile)
+        val workouts = FitifyDatabaseParser.parseWorkouts(dumpDir)
         Log.i(TAG, "Parsed ${workouts.size} workouts from Fitify database.")
 
         if (workouts.isEmpty()) {
-            dbFile.delete()
+            try { dumpDir.deleteRecursively() } catch (_: Exception) {}
             return@withContext Result.success()
         }
 
@@ -53,7 +53,7 @@ class SyncWorker(
         val healthConnectManager = HealthConnectManager(applicationContext)
         if (!healthConnectManager.hasAllPermissions()) {
             Log.w(TAG, "Health Connect permissions missing during background sync.")
-            dbFile.delete()
+            try { dumpDir.deleteRecursively() } catch (_: Exception) {}
             return@withContext Result.failure()
         }
 
@@ -62,11 +62,8 @@ class SyncWorker(
 
         // 5. Clean up temporary database dump
         try {
-            dbFile.delete()
-            val wal = java.io.File("${dbFile.absolutePath}-wal")
-            val shm = java.io.File("${dbFile.absolutePath}-shm")
-            if (wal.exists()) wal.delete()
-            if (shm.exists()) shm.delete()
+            RootRunner.runSu("rm -rf /data/local/tmp/fitify_dump")
+            dumpDir.deleteRecursively()
         } catch (_: Exception) {}
 
         // 6. Notify user if new sessions synced
@@ -102,6 +99,6 @@ class SyncWorker(
             .setAutoCancel(true)
             .build()
 
-        notificationManager.notify(101, notification)
+        notificationManager.notify(1001, notification)
     }
 }
