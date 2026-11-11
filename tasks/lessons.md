@@ -19,3 +19,13 @@
 - **Category**: Health Connect Data Model
 - **What happened**: Health Connect's `ExerciseSegment` does not have an integer `duration` field; it models duration strictly via `[startTime, endTime]`, with `repetitions = 0` for time-based exercises like planks.
 - **Rule to follow**: Represent time-based exercises by setting `endTime = startTime.plusSeconds(durationSeconds)` and `repetitions = 0`.
+
+## 2026-11-11 - Scaffold Inset Consumption & Android Lint
+- **Category**: Jetpack Compose / Edge-to-Edge Lint
+- **What happened**: In edge-to-edge screens with `WindowInsets(0)` or `WindowInsets.safeDrawing`, ignoring the `innerPadding` parameter of `Scaffold` (`{ _ -> ... }`) fails Android CI with `UnusedMaterial3ScaffoldPaddingParameter` (fatal lint error).
+- **Rule to follow**: Always consume `innerPadding` in the child modifier (`Modifier.padding(innerPadding)`), or explicitly configure `Scaffold(contentWindowInsets = WindowInsets.safeDrawing)` so that insets and system bars are respected without manual padding calculations.
+
+## 2026-11-11 - Canvas-Based Micro-Timelines for High-Volume LazyColumns
+- **Category**: Jetpack Compose / Performance
+- **What happened**: Emitting 20-30 layout nodes (`Row` + `Box`) per workout card in a 2,500+ item LazyColumn causes excessive layout allocations and measurement passes on scroll.
+- **Rule to follow**: Render micro-timelines and multi-colored progress bars using a single `Canvas` in the draw phase, memoizing segment colors with `remember(items)`.
