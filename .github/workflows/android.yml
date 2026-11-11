@@ -1,0 +1,65 @@
+name: Android checks
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+      - name: Install project Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+      - name: Build debug and release, both unit-test variants, and both lint variants
+        run: >-
+          bash gradlew :app:assembleDebug :app:assembleRelease
+          :app:testDebugUnitTest :app:testReleaseUnitTest
+          :app:lintDebug :app:lintRelease --stacktrace
+      - name: Print lint errors
+        if: failure()
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          for report in Path('app/build/reports').glob('lint-results-*.xml'):
+              for issue in ET.parse(report).getroot().findall('issue'):
+                  if issue.get('severity') in ('Error', 'Fatal'):
+                      print(report.name, issue.attrib, [node.attrib for node in issue.findall('location')])
+          for report in Path('app/build/reports').glob('lint-results-*.sarif'):
+              for run in json.loads(report.read_text()).get('runs', []):
+                  for issue in run.get('results', []):
+                      if issue.get('level') == 'error':
+                          print(report.name, issue.get('ruleId'), issue.get('message'), issue.get('locations'))
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: android-builds-and-reports
+          retention-days: 14
+          path: |
+            app/build/reports/
+            build/reports/
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk

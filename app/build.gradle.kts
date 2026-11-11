@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.fitifysync.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.fitifysync.app"

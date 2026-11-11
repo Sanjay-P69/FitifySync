@@ -1,0 +1,93 @@
+name: Release APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release-apk:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          cache-read-only: true
+      - name: Install project Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+      - name: Check release sources
+        run: >-
+          bash gradlew :app:testReleaseUnitTest
+          :app:lintRelease --stacktrace
+      - name: Configure optional release signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]; then
+            echo 'mode=unsigned' >> "$GITHUB_OUTPUT"
+            echo 'No signing secrets configured. Building an unsigned release APK (not directly installable).' >> "$GITHUB_STEP_SUMMARY"
+          else
+            : "${KEYSTORE_BASE64:?Configure ANDROID_KEYSTORE_BASE64}"
+            : "${STORE_PASSWORD:?Configure ANDROID_KEYSTORE_PASSWORD}"
+            : "${KEY_ALIAS:?Configure ANDROID_KEY_ALIAS}"
+            : "${KEY_PASSWORD:?Configure ANDROID_KEY_PASSWORD}"
+            umask 077
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            echo 'mode=signed' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build unsigned release APK
+        if: steps.signing.outputs.mode == 'unsigned'
+        run: bash gradlew :app:assembleRelease --stacktrace
+      - name: Build signed release APK
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash gradlew :app:assembleRelease --no-configuration-cache
+      - name: Verify signed APK
+        if: steps.signing.outputs.mode == 'signed'
+        run: '"$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk'
+      - name: Generate checksums
+        run: sha256sum app/build/outputs/apk/release/*.apk > SHA256SUMS
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-apk-${{ steps.signing.outputs.mode }}-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/release/*.apk
+            SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-reports-${{ github.sha }}
+          retention-days: 14
+          path: |
+            app/build/reports/
+            build/reports/
