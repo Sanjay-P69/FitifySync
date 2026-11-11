@@ -3,6 +3,7 @@ package com.fitifysync.app
 import com.fitifysync.app.data.model.FitifyExerciseDetail
 import com.fitifysync.app.data.model.FitifyWorkout
 import com.fitifysync.app.ui.state.UiState
+import com.fitifysync.app.ui.state.WorkoutStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,6 +25,23 @@ class UiStateTest {
 
         val stateSyncing = stateReady.copy(isSyncing = true)
         assertFalse("Cannot trigger sync when already syncing", stateSyncing.canSync)
+    }
+
+    @Test
+    fun testWorkoutStatsCalculations() {
+        val stats = WorkoutStats(
+            totalSessions = 2424,
+            totalDurationSeconds = 303120L, // 84h 12m
+            totalCalories = 124500.0,
+            avgHeartRate = 120,
+            minHeartRate = 85,
+            maxHeartRate = 168
+        )
+
+        assertEquals("84h 12m", stats.formattedDuration)
+        assertEquals("124.5k kcal", stats.formattedCalories)
+        assertEquals(2424, stats.totalSessions)
+        assertEquals(Integer.valueOf(120), stats.avgHeartRate)
     }
 
     @Test

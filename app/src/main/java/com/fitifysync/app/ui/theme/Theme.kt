@@ -11,27 +11,47 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = BrandAccent,
+    primary = BrandPrimaryLight,
+    onPrimary = SurfaceLowestDark,
+    primaryContainer = BrandPrimary,
+    onPrimaryContainer = SurfaceLowestLight,
     secondary = BrandSecondary,
-    tertiary = BrandPrimary,
-    background = Slate900,
-    surface = Slate800,
-    surfaceVariant = Slate700
+    onSecondary = SurfaceLowestDark,
+    secondaryContainer = SurfaceHighDark,
+    onSecondaryContainer = BrandSecondaryLight,
+    tertiary = BrandTertiary,
+    onTertiary = SurfaceLowestDark,
+    background = SurfaceLowestDark,
+    onBackground = SurfaceLowestLight,
+    surface = SurfaceLowDark,
+    onSurface = SurfaceLowestLight,
+    surfaceVariant = SurfaceContainerDark,
+    onSurfaceVariant = SurfaceHighLight
 )
 
 private val LightColorScheme = lightColorScheme(
     primary = BrandPrimary,
+    onPrimary = SurfaceLowestLight,
+    primaryContainer = SurfaceContainerLight,
+    onPrimaryContainer = BrandPrimary,
     secondary = BrandSecondary,
-    tertiary = BrandPrimaryDark,
-    background = Slate50,
-    surface = Slate50,
-    surfaceVariant = Slate100
+    onSecondary = SurfaceLowestLight,
+    secondaryContainer = SurfaceHighLight,
+    onSecondaryContainer = SurfaceLowestDark,
+    tertiary = BrandTertiary,
+    onTertiary = SurfaceLowestLight,
+    background = SurfaceLowLight,
+    onBackground = SurfaceLowestDark,
+    surface = SurfaceLowestLight,
+    onSurface = SurfaceLowestDark,
+    surfaceVariant = SurfaceContainerLight,
+    onSurfaceVariant = SurfaceLowestDark
 )
 
 @Composable
 fun FitifySyncTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // Disabled by default for vibrant M3 Expressive branding
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
