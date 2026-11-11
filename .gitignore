@@ -16,3 +16,9 @@ app/build/
 *.keystore
 *.jks
 __pycache__/
+
+# Root temporary test dumps and screen captures
+/*.xml
+/*.png
+/*.db
+/*.csv

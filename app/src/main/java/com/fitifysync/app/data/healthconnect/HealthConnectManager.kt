@@ -5,7 +5,9 @@ import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.ExerciseSegment
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
@@ -14,6 +16,7 @@ import androidx.health.connect.client.units.Energy
 import com.fitifysync.app.data.model.FitifyWorkout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.ZoneOffset
 
 data class SyncResult(
@@ -36,7 +39,8 @@ class HealthConnectManager(private val context: Context) {
         HealthPermission.getReadPermission(ExerciseSessionRecord::class),
         HealthPermission.getWritePermission(ActiveCaloriesBurnedRecord::class),
         HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
-        HealthPermission.getWritePermission(TotalCaloriesBurnedRecord::class)
+        HealthPermission.getWritePermission(TotalCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(HeartRateRecord::class)
     )
 
     /**
@@ -56,32 +60,84 @@ class HealthConnectManager(private val context: Context) {
     }
 
     /**
-     * Retrieves previously synced client record IDs from Health Connect to prevent duplicates.
+     * Wipes all previously synced Fitify records (ExerciseSession, ActiveCalories) from Health Connect.
+     */
+    suspend fun deleteAllSyncedRecords(): Boolean = withContext(Dispatchers.IO) {
+        if (!isAvailable()) return@withContext false
+        try {
+            val filter = TimeRangeFilter.after(Instant.EPOCH)
+            healthConnectClient.deleteRecords(ExerciseSessionRecord::class, filter)
+            healthConnectClient.deleteRecords(ActiveCaloriesBurnedRecord::class, filter)
+            healthConnectClient.deleteRecords(TotalCaloriesBurnedRecord::class, filter)
+            Log.i(TAG, "Successfully deleted all previous FitifySync records from Health Connect.")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error wiping previous records from Health Connect", e)
+            false
+        }
+    }
+
+    /**
+     * Retrieves previously synced client record IDs from Health Connect with pagination to prevent duplicates.
      */
     suspend fun getExistingClientRecordIds(workouts: List<FitifyWorkout>): Set<String> = withContext(Dispatchers.IO) {
         if (workouts.isEmpty()) return@withContext emptySet()
         val earliest = workouts.minOf { it.startTime }
         val latest = workouts.maxOf { it.endTime }
+        val existing = mutableSetOf<String>()
+        var pageToken: String? = null
 
+        try {
+            do {
+                val response = healthConnectClient.readRecords(
+                    ReadRecordsRequest(
+                        recordType = ExerciseSessionRecord::class,
+                        timeRangeFilter = TimeRangeFilter.between(earliest, latest),
+                        pageToken = pageToken
+                    )
+                )
+                response.records.mapNotNullTo(existing) { it.metadata.clientRecordId }
+                pageToken = response.pageToken
+            } while (pageToken != null)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error checking existing records in Health Connect", e)
+        }
+        existing
+    }
+
+    /**
+     * Reads heart rate samples from Health Connect (e.g. synced from Samsung Health) for a workout interval.
+     */
+    suspend fun readHeartRateForRange(startTime: Instant, endTime: Instant): Triple<Int, Int, Int>? = withContext(Dispatchers.IO) {
+        if (!isAvailable()) return@withContext null
         try {
             val response = healthConnectClient.readRecords(
                 ReadRecordsRequest(
-                    recordType = ExerciseSessionRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(earliest, latest)
+                    recordType = HeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
                 )
             )
-            response.records.mapNotNull { it.metadata.clientRecordId }.toSet()
+            val allSamples = response.records.flatMap { it.samples }
+            if (allSamples.isNotEmpty()) {
+                val bpms = allSamples.map { it.beatsPerMinute.toInt() }
+                Triple(
+                    bpms.average().toInt(),
+                    bpms.minOrNull() ?: 0,
+                    bpms.maxOrNull() ?: 0
+                )
+            } else {
+                null
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Error checking existing records in Health Connect", e)
-            emptySet()
+            Log.w(TAG, "Could not query heart rate for range $startTime to $endTime", e)
+            null
         }
     }
 
     /**
-     * Inserts extracted Fitify workouts into Health Connect.
-     * Writes ExerciseSessionRecord and ActiveCaloriesBurnedRecord.
+     * Inserts extracted Fitify workouts into Health Connect with full ExerciseSegment breakdowns.
      */
-    suspend fun syncWorkouts(workouts: List<FitifyWorkout>): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun syncWorkouts(workouts: List<FitifyWorkout>, wipePreviousFirst: Boolean = false): SyncResult = withContext(Dispatchers.IO) {
         if (!isAvailable()) {
             return@withContext SyncResult(workouts.size, 0, 0, workouts.size, "Health Connect is not available on this device.")
         }
@@ -89,12 +145,18 @@ class HealthConnectManager(private val context: Context) {
             return@withContext SyncResult(workouts.size, 0, 0, workouts.size, "Health Connect permissions have not been granted.")
         }
 
-        val existingIds = getExistingClientRecordIds(workouts)
+        if (wipePreviousFirst) {
+            deleteAllSyncedRecords()
+        }
+
+        val existingIds = if (wipePreviousFirst) emptySet() else getExistingClientRecordIds(workouts)
         var syncedCount = 0
         var alreadyCount = 0
         var errorCount = 0
+        var lastError: String? = null
 
-        val recordsToInsert = mutableListOf<androidx.health.connect.client.records.Record>()
+        val currentBatch = mutableListOf<androidx.health.connect.client.records.Record>()
+        var workoutsInBatch = 0
 
         for (workout in workouts) {
             val clientRecordId = "fitify_${workout.id}"
@@ -107,56 +169,115 @@ class HealthConnectManager(private val context: Context) {
             try {
                 val zoneOffset = ZoneOffset.systemDefault().rules.getOffset(workout.startTime)
 
-                // 1. Exercise Session Record
-                val sessionRecord = ExerciseSessionRecord(
-                    startTime = workout.startTime,
-                    startZoneOffset = zoneOffset,
-                    endTime = workout.endTime,
-                    endZoneOffset = zoneOffset,
-                    exerciseType = workout.toHealthConnectExerciseType(),
-                    title = workout.title,
-                    notes = workout.rawNotes ?: "Imported from Fitify with Root Access",
-                    metadata = Metadata(clientRecordId = clientRecordId)
-                )
-                recordsToInsert.add(sessionRecord)
+                // Build nested ExerciseSegment list for individual exercises and rest periods
+                val segments = buildExerciseSegments(workout)
+
+                // Effective end time must be after startTime and at or after the end of the last segment
+                val lastSegmentEnd = if (segments.isNotEmpty()) segments.last().endTime else workout.endTime
+                val effectiveEndTime = if (lastSegmentEnd.isAfter(workout.startTime)) {
+                    if (workout.endTime.isAfter(lastSegmentEnd)) workout.endTime else lastSegmentEnd
+                } else {
+                    workout.startTime.plusSeconds(60L)
+                }
+
+                // 1. Exercise Session Record with nested ExerciseSegments
+                val sessionRecord = try {
+                    ExerciseSessionRecord(
+                        startTime = workout.startTime,
+                        startZoneOffset = zoneOffset,
+                        endTime = effectiveEndTime,
+                        endZoneOffset = zoneOffset,
+                        exerciseType = workout.toHealthConnectExerciseType(),
+                        title = workout.title,
+                        notes = workout.rawNotes ?: "Imported from Fitify with Root Access",
+                        segments = segments,
+                        metadata = Metadata(clientRecordId = clientRecordId)
+                    )
+                } catch (e: IllegalArgumentException) {
+                    // Fallback to universal OTHER_WORKOUT if any segment conflict occurs
+                    ExerciseSessionRecord(
+                        startTime = workout.startTime,
+                        startZoneOffset = zoneOffset,
+                        endTime = effectiveEndTime,
+                        endZoneOffset = zoneOffset,
+                        exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT,
+                        title = workout.title,
+                        notes = workout.rawNotes ?: "Imported from Fitify with Root Access",
+                        segments = segments,
+                        metadata = Metadata(clientRecordId = clientRecordId)
+                    )
+                }
+                currentBatch.add(sessionRecord)
 
                 // 2. Active Calories Burned Record
                 if (workout.caloriesBurned > 0) {
                     val caloriesRecord = ActiveCaloriesBurnedRecord(
                         startTime = workout.startTime,
                         startZoneOffset = zoneOffset,
-                        endTime = workout.endTime,
+                        endTime = effectiveEndTime,
                         endZoneOffset = zoneOffset,
                         energy = Energy.kilocalories(workout.caloriesBurned),
                         metadata = Metadata(clientRecordId = "${clientRecordId}_cal")
                     )
-                    recordsToInsert.add(caloriesRecord)
+                    currentBatch.add(caloriesRecord)
                 }
 
+                workoutsInBatch++
                 workout.isSynced = true
-                syncedCount++
+
+                // Flush batch when reaching 50 records to prevent Binder overflow
+                if (currentBatch.size >= 50) {
+                    try {
+                        healthConnectClient.insertRecords(currentBatch)
+                        syncedCount += workoutsInBatch
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Batch insert encountered error, inserting individually", e)
+                        for (rec in currentBatch) {
+                            try {
+                                healthConnectClient.insertRecords(listOf(rec))
+                                if (rec is ExerciseSessionRecord) syncedCount++
+                            } catch (singleE: Exception) {
+                                Log.e(TAG, "Single record insert failed: ${singleE.message}")
+                                if (rec is ExerciseSessionRecord) {
+                                    errorCount++
+                                    lastError = singleE.localizedMessage
+                                }
+                            }
+                        }
+                    }
+                    currentBatch.clear()
+                    workoutsInBatch = 0
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create Health Connect record for workout ${workout.id}", e)
+                Log.e(TAG, "Failed creating or inserting batch into Health Connect", e)
                 errorCount++
+                lastError = e.localizedMessage
+                currentBatch.clear()
+                workoutsInBatch = 0
             }
         }
 
-        if (recordsToInsert.isNotEmpty()) {
+        // Flush remaining records
+        if (currentBatch.isNotEmpty()) {
             try {
-                // Insert in batches of 50 to respect Health Connect rate limits
-                recordsToInsert.chunked(50).forEach { batch ->
-                    healthConnectClient.insertRecords(batch)
-                }
-                Log.i(TAG, "Inserted ${recordsToInsert.size} records into Health Connect.")
+                healthConnectClient.insertRecords(currentBatch)
+                syncedCount += workoutsInBatch
+                currentBatch.clear()
             } catch (e: Exception) {
-                Log.e(TAG, "Batch insert to Health Connect failed", e)
-                return@withContext SyncResult(
-                    workouts.size,
-                    0,
-                    alreadyCount,
-                    syncedCount,
-                    "Failed inserting records into Health Connect: ${e.localizedMessage}"
-                )
+                Log.w(TAG, "Final batch insert encountered error, inserting individually", e)
+                for (rec in currentBatch) {
+                    try {
+                        healthConnectClient.insertRecords(listOf(rec))
+                        if (rec is ExerciseSessionRecord) syncedCount++
+                    } catch (singleE: Exception) {
+                        Log.e(TAG, "Single record insert failed: ${singleE.message}")
+                        if (rec is ExerciseSessionRecord) {
+                            errorCount++
+                            lastError = singleE.localizedMessage
+                        }
+                    }
+                }
+                currentBatch.clear()
             }
         }
 
@@ -164,7 +285,85 @@ class HealthConnectManager(private val context: Context) {
             totalWorkouts = workouts.size,
             newlySynced = syncedCount,
             alreadySynced = alreadyCount,
-            failedCount = errorCount
+            failedCount = errorCount,
+            errorMessage = lastError
         )
+    }
+
+    private fun buildExerciseSegments(workout: FitifyWorkout): List<ExerciseSegment> {
+        if (workout.exercises.isEmpty()) return emptyList()
+
+        val segments = mutableListOf<ExerciseSegment>()
+        var cursor = workout.startTime
+
+        for (ex in workout.exercises) {
+            // 1. Rest / Transition period (get_ready_duration)
+            if (ex.restDurationSeconds > 0) {
+                val restEnd = cursor.plusSeconds(ex.restDurationSeconds)
+                segments.add(
+                    ExerciseSegment(
+                        startTime = cursor,
+                        endTime = restEnd,
+                        segmentType = ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST,
+                        repetitions = 0
+                    )
+                )
+                cursor = restEnd
+            }
+
+            // 2. Active exercise period
+            val exDuration = if (ex.durationSeconds > 0) {
+                ex.durationSeconds
+            } else if (ex.reps > 0) {
+                (ex.reps * 3L).coerceAtLeast(15L)
+            } else {
+                30L
+            }
+
+            val exEnd = cursor.plusSeconds(exDuration)
+            segments.add(
+                ExerciseSegment(
+                    startTime = cursor,
+                    endTime = exEnd,
+                    segmentType = mapSegmentType(ex.code, ex.exerciseName),
+                    repetitions = ex.reps
+                )
+            )
+            cursor = exEnd
+        }
+        return segments
+    }
+
+    private fun mapSegmentType(code: String, name: String): Int {
+        val lower = (code + " " + name).lowercase()
+        return when {
+            lower.contains("rest") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST
+            lower.contains("pause") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE
+            lower.contains("stretch") || lower.contains("neck") || lower.contains("hamstring") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_STRETCHING
+            lower.contains("plank") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_PLANK
+            lower.contains("squat") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_SQUAT
+            lower.contains("lunge") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_LUNGE
+            lower.contains("crunch") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_CRUNCH
+            lower.contains("situp") || lower.contains("sit_up") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_SIT_UP
+            lower.contains("burpee") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_BURPEE
+            lower.contains("jump_rope") || lower.contains("skipping") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_JUMP_ROPE
+            lower.contains("jumping_jack") || lower.contains("jump") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_JUMPING_JACK
+            lower.contains("mountain_climber") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_MOUNTAIN_CLIMBER
+            lower.contains("pullup") || lower.contains("pull_up") || lower.contains("chin_up") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_PULL_UP
+            lower.contains("bench_press") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_BENCH_PRESS
+            lower.contains("pushup") || lower.contains("push_up") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_WEIGHTLIFTING
+            lower.contains("curl") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_ARM_CURL
+            lower.contains("shoulder_press") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_SHOULDER_PRESS
+            lower.contains("deadlift") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_DEADLIFT
+            lower.contains("hip_thrust") || lower.contains("bridge") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_HIP_THRUST
+            lower.contains("leg_raise") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_LEG_RAISE
+            lower.contains("kettlebell") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_KETTLEBELL_SWING
+            lower.contains("yoga") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_YOGA
+            lower.contains("pilates") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_PILATES
+            lower.contains("run") || lower.contains("sprint") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_RUNNING
+            lower.contains("walk") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_WALKING
+            lower.contains("hiit") || lower.contains("interval") -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING
+            else -> ExerciseSegment.EXERCISE_SEGMENT_TYPE_OTHER_WORKOUT
+        }
     }
 }

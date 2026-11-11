@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedReader
-import java.io.DataOutputStream
 import java.io.File
 import java.io.InputStreamReader
 
@@ -21,11 +21,9 @@ object RootRunner {
     private const val TAG = "RootRunner"
     const val FITIFY_PACKAGE = "com.fitifyworkouts.bodyweight.workoutapp"
 
-    /**
-     * Checks if the 'su' binary is available in common PATH locations.
-     */
     fun isSuBinaryAvailable(): Boolean {
         val paths = arrayOf(
+            "/system_ext/bin/su",
             "/system/bin/su",
             "/system/xbin/su",
             "/sbin/su",
@@ -33,7 +31,10 @@ object RootRunner {
             "/system/bin/failsafe/su",
             "/data/local/xbin/su",
             "/data/local/bin/su",
-            "/data/local/su"
+            "/data/local/su",
+            "/data/adb/ksu/bin/su",
+            "/data/adb/ap/bin/su",
+            "/data/adb/magisk/su"
         )
         for (path in paths) {
             if (File(path).exists()) return true
@@ -43,128 +44,85 @@ object RootRunner {
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val line = reader.readLine()
             process.waitFor() == 0 && !line.isNullOrEmpty()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
 
-    /**
-     * Executes root shell command using 'su'.
-     */
-    suspend fun runSu(command: String): CommandResult = withContext(Dispatchers.IO) {
-        var process: Process? = null
-        var os: DataOutputStream? = null
-        try {
-            process = Runtime.getRuntime().exec("su")
-            os = DataOutputStream(process.outputStream)
-            os.writeBytes("$command\n")
-            os.writeBytes("exit\n")
-            os.flush()
-
-            val stdoutReader = BufferedReader(InputStreamReader(process.inputStream))
-            val stderrReader = BufferedReader(InputStreamReader(process.errorStream))
-
-            val stdout = StringBuilder()
-            val stderr = StringBuilder()
-
-            var line: String?
-            while (stdoutReader.readLine().also { line = it } != null) {
-                stdout.append(line).append("\n")
-            }
-            while (stderrReader.readLine().also { line = it } != null) {
-                stderr.append(line).append("\n")
-            }
-
-            val exitCode = process.waitFor()
-            CommandResult(exitCode, stdout.toString().trim(), stderr.toString().trim())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error executing root command: $command", e)
-            CommandResult(-1, "", e.localizedMessage ?: "Unknown error")
-        } finally {
+    suspend fun runSu(command: String, timeoutMillis: Long = 15000L): CommandResult = withContext(Dispatchers.IO) {
+        val result = withTimeoutOrNull(timeoutMillis) {
+            var process: Process? = null
             try {
-                os?.close()
-                process?.destroy()
-            } catch (_: Exception) {}
+                process = ProcessBuilder("su", "-c", command)
+                    .redirectErrorStream(true)
+                    .start()
+
+                process.outputStream.close()
+
+                val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+                val exitCode = process.waitFor()
+
+                Log.d(TAG, "runSu cmd: $command -> exitCode: $exitCode, output: $output")
+                CommandResult(exitCode, output, if (exitCode != 0) output else "")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error executing root command: $command", e)
+                CommandResult(-1, "", e.localizedMessage ?: "Execution error")
+            } finally {
+                try {
+                    process?.destroy()
+                } catch (_: Exception) {}
+            }
         }
+
+        result ?: CommandResult(-1, "", "Command timed out after ${timeoutMillis}ms")
     }
 
-    /**
-     * Requests root access and verifies root UID.
-     */
     suspend fun hasRootPermission(): Boolean {
         val res = runSu("id")
-        return res.isSuccess && res.output.contains("uid=0")
+        return res.isSuccess && (res.output.contains("uid=0") || res.output.contains("context=u:r:magisk"))
     }
 
-    /**
-     * Discovers database files in Fitify's private directories.
-     */
-    suspend fun discoverFitifyDatabases(): List<String> {
-        val candidatePaths = listOf(
-            "/data/data/$FITIFY_PACKAGE/databases",
-            "/data/user/0/$FITIFY_PACKAGE/databases"
-        )
-
-        for (dir in candidatePaths) {
-            val res = runSu("ls $dir")
-            if (res.isSuccess && res.output.isNotBlank()) {
-                val files = res.output.lines()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() && !it.endsWith("-journal") && !it.endsWith("-wal") && !it.endsWith("-shm") }
-                if (files.isNotEmpty()) {
-                    return files.map { "$dir/$it" }
-                }
-            }
-        }
-        return emptyList()
-    }
-
-    /**
-     * Safely copies the Fitify SQLite database (including WAL and SHM journal files)
-     * to the app's internal cache directory, then grants read permission to the app.
-     */
     suspend fun dumpFitifyDatabase(context: Context): Result<File> = withContext(Dispatchers.IO) {
         try {
-            val dbList = discoverFitifyDatabases()
-            if (dbList.isEmpty()) {
+            val destDir = File(context.filesDir, "fitify_dump").apply { mkdirs() }
+            val destPath = destDir.absolutePath
+
+            val candidateLocations = listOf(
+                "/data/user/0/$FITIFY_PACKAGE/databases",
+                "/data/data/$FITIFY_PACKAGE/databases",
+                "/sdcard/Download",
+                "/data/media/0/Download"
+            )
+
+            val copyCommands = mutableListOf("mkdir -p '$destPath'")
+            for (dir in candidateLocations) {
+                copyCommands.add("cp -f $dir/firestore* '$destPath/' 2>/dev/null")
+                copyCommands.add("cp -f $dir/fitify.db* '$destPath/' 2>/dev/null")
+            }
+            copyCommands.add("chmod -R 777 '$destPath'")
+            copyCommands.add("ls -la '$destPath'")
+
+            val fullCmd = copyCommands.joinToString(" ; ")
+            val res = runSu(fullCmd)
+            Log.i(TAG, "Database extraction result: exit=${res.exitCode}, output=${res.output}")
+
+            val files = destDir.listFiles()?.filter {
+                it.isFile && it.length() > 0 &&
+                        !it.name.endsWith("-journal") &&
+                        !it.name.endsWith("-wal") &&
+                        !it.name.endsWith("-shm")
+            } ?: emptyList()
+
+            if (files.isEmpty()) {
                 return@withContext Result.failure(
-                    IllegalStateException("No Fitify database found. Ensure Fitify is installed and has been opened at least once.")
+                    RuntimeException("No database files found in candidate locations: $candidateLocations")
                 )
             }
 
-            // Find primary database (prefer fitify.db, workouts.db, or largest file)
-            val primaryDbRemotePath = dbList.firstOrNull {
-                it.contains("fitify", ignoreCase = true) || it.contains("workout", ignoreCase = true)
-            } ?: dbList.first()
-
-            val localDir = File(context.cacheDir, "fitify_dump").apply { mkdirs() }
-            val localDbFile = File(localDir, "fitify_extracted.db")
-
-            // Copy main DB file
-            val copyCmd = StringBuilder()
-            copyCmd.append("cp \"$primaryDbRemotePath\" \"${localDbFile.absolutePath}\"\n")
-            copyCmd.append("chmod 666 \"${localDbFile.absolutePath}\"\n")
-
-            // Copy WAL and SHM if present to prevent SQLite corruption or missing recent records
-            val walRemote = "$primaryDbRemotePath-wal"
-            val walLocal = "${localDbFile.absolutePath}-wal"
-            val shmRemote = "$primaryDbRemotePath-shm"
-            val shmLocal = "${localDbFile.absolutePath}-shm"
-
-            copyCmd.append("if [ -f \"$walRemote\" ]; then cp \"$walRemote\" \"$walLocal\" && chmod 666 \"$walLocal\"; fi\n")
-            copyCmd.append("if [ -f \"$shmRemote\" ]; then cp \"$shmRemote\" \"$shmLocal\" && chmod 666 \"$shmLocal\"; fi\n")
-
-            val result = runSu(copyCmd.toString())
-            if (!result.isSuccess || !localDbFile.exists() || localDbFile.length() == 0L) {
-                return@withContext Result.failure(
-                    RuntimeException("Failed to dump database via root: ${result.error}")
-                )
-            }
-
-            Log.i(TAG, "Successfully dumped Fitify DB: ${localDbFile.absolutePath} (${localDbFile.length()} bytes)")
-            Result.success(localDbFile)
+            Log.i(TAG, "Successfully extracted ${files.size} database file(s) to $destPath: ${files.map { "${it.name} (${it.length()} bytes)" }}")
+            Result.success(destDir)
         } catch (e: Exception) {
-            Log.e(TAG, "Exception dumping Fitify database", e)
+            Log.e(TAG, "Exception during database dump", e)
             Result.failure(e)
         }
     }

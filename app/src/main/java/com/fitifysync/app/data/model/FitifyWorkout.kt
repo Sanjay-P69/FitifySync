@@ -1,5 +1,6 @@
 package com.fitifysync.app.data.model
 
+import androidx.health.connect.client.records.ExerciseSessionRecord
 import java.time.Instant
 
 /**
@@ -7,9 +8,11 @@ import java.time.Instant
  */
 data class FitifyExerciseDetail(
     val exerciseName: String,
+    val code: String = "",
     val sets: Int = 1,
     val reps: Int = 0,
     val durationSeconds: Long = 0,
+    val restDurationSeconds: Long = 0,
     val weightKg: Double = 0.0
 )
 
@@ -26,27 +29,25 @@ data class FitifyWorkout(
     val caloriesBurned: Double,
     val exercises: List<FitifyExerciseDetail> = emptyList(),
     val rawNotes: String? = null,
-    var isSynced: Boolean = false
+    var isSynced: Boolean = false,
+    var avgHeartRate: Int? = null,
+    var minHeartRate: Int? = null,
+    var maxHeartRate: Int? = null
 ) {
     /**
-     * Maps Fitify training categories to Health Connect ExerciseSessionRecord types.
-     * Health Connect supports:
-     * - EXERCISE_TYPE_STRENGTH_TRAINING
-     * - EXERCISE_TYPE_CALISTHENICS
-     * - EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING
-     * - EXERCISE_TYPE_STRETCHING
-     * - EXERCISE_TYPE_OTHER_WORKOUT
+     * Maps Fitify training categories to universal Health Connect ExerciseSessionRecord types
+     * to guarantee compatibility with all nested ExerciseSegment types.
      */
     fun toHealthConnectExerciseType(): Int {
         val lower = workoutType.lowercase()
         val titleLower = title.lowercase()
         return when {
-            lower.contains("hiit") || titleLower.contains("hiit") || lower.contains("interval") -> 27 // EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING
-            lower.contains("calisthenic") || lower.contains("bodyweight") -> 10 // EXERCISE_TYPE_CALISTHENICS
-            lower.contains("stretch") || lower.contains("warmup") || lower.contains("cool") -> 68 // EXERCISE_TYPE_STRETCHING
-            lower.contains("strength") || lower.contains("weight") || lower.contains("muscle") -> 69 // EXERCISE_TYPE_STRENGTH_TRAINING
-            lower.contains("cardio") -> 8 // EXERCISE_TYPE_BOOT_CAMP or AEROBICS
-            else -> 0 // EXERCISE_TYPE_OTHER_WORKOUT
+            lower.contains("hiit") || titleLower.contains("hiit") || lower.contains("interval") -> 
+                ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING
+            lower.contains("bootcamp") || lower.contains("camp") -> 
+                ExerciseSessionRecord.EXERCISE_TYPE_BOOT_CAMP
+            else -> 
+                ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT
         }
     }
 }
