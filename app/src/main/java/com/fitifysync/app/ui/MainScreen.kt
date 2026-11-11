@@ -29,17 +29,15 @@ fun MainScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
-    val contentPadding = WindowInsets.safeDrawing
-        .add(WindowInsets(left = 16.dp, right = 16.dp, top = 12.dp, bottom = 32.dp))
-        .asPaddingValues()
-
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        contentWindowInsets = WindowInsets(0)
-    ) { _ ->
+        contentWindowInsets = WindowInsets.safeDrawing
+    ) { innerPadding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // 1. Floating Expressive Pill Header
