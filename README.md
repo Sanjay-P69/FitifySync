@@ -98,6 +98,33 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ### 4. Link Google Fit
 1. Open the **Google Fit** app.
 2. Tap **Profile** → **Settings (Gear Icon)**.
+3. Tap **Manage Health Connect settings** and ensure read access is enabled.
+
+---
+
+## 📋 Health Connect Notes Payload (`fitifysync.exercise_segments`)
+
+To allow downstream fitness loggers and AI workout analysts (such as [RepForge](https://github.com/Devasy/RepForge)) to recover exact movement names, exercise codes, and variant details that would otherwise be flattened into generic Health Connect segment types (e.g. `WEIGHTLIFTING`), FitifySync serializes a structured JSON payload into `ExerciseSessionRecord.notes` alongside the human-readable summary.
+
+### Example Notes Payload:
+```text
+Fitify Morning Strength | Exercises: 2
+
+{"schema":"fitifysync.exercise_segments","version":1,"exercises":[{"segment_index":1,"code":"push_up","name":"Push Up","timing_kind":"reconstructed"},{"segment_index":3,"code":"bw012_jumping_jacks","name":"Jumping Jacks","timing_kind":"reconstructed"}]}
+```
+
+### Schema Specification:
+* `schema`: `"fitifysync.exercise_segments"`
+* `version`: integer (currently `1`)
+* `exercises`: array of exercise segment objects:
+  * `segment_index`: `int` (0-based index corresponding to the segment in `ExerciseSessionRecord.segments`, accounting for rest/pause segments)
+  * `code`: `string` (original Fitify movement code, e.g. `push_up`, `bo091_front_neck_stretch`)
+  * `name`: `string` (clean display title)
+  * `timing_kind`: `"reconstructed"` (indicates segment start/end boundaries were reconstructed from session timestamps/durations rather than live hardware sensor triggers)
+
+### Health Connect Notes Safety:
+The combined notes string is strictly kept within Health Connect's 1000-character limit (`MAX_NOTE_LENGTH`). For very large routines with numerous movements, the summary prefix is trimmed and exercises are safely prioritized to preserve parseable JSON.
+Existing sessions synced with earlier versions are automatically enriched with higher `clientRecordVersion` without duplicating records.
 3. Under *Health Connect*, toggle **Sync Fit with Health Connect** to **ON**.
 4. Workouts and active calories will automatically sync to your Google Fit dashboard.
 
