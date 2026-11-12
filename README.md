@@ -93,12 +93,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 2. Tap the **Three Dots Menu (⋮)** → **Settings**.
 3. Tap **Health Connect**.
 4. Enable **Allow all permissions** for Samsung Health to read and write.
-5. Your Fitify workouts synced by FitifySync will now appear inside Samsung Health workouts!
+5. If Samsung Health supports importing these Health Connect workout records, they can appear in its workout history.
 
 ### 4. Link Google Fit
 1. Open the **Google Fit** app.
 2. Tap **Profile** → **Settings (Gear Icon)**.
 3. Tap **Manage Health Connect settings** and ensure read access is enabled.
+4. Under *Health Connect*, toggle **Sync Fit with Health Connect** to **ON**.
+5. Display in Google Fit or Samsung Health depends on that app supporting and reading the exported record types.
 
 ---
 
@@ -110,7 +112,7 @@ To allow downstream fitness loggers and AI workout analysts (such as [RepForge](
 ```text
 Fitify Morning Strength | Exercises: 2
 
-{"schema":"fitifysync.exercise_segments","version":1,"exercises":[{"segment_index":1,"code":"push_up","name":"Push Up","timing_kind":"reconstructed"},{"segment_index":3,"code":"bw012_jumping_jacks","name":"Jumping Jacks","timing_kind":"reconstructed"}]}
+{"schema":"fitifysync.exercise_segments","version":1,"exercises":[{"segment_index":1,"code":"bo233_push_ups","name":"Push-Ups","timing_kind":"reconstructed"},{"segment_index":3,"code":"bo009_squats","name":"Squats","timing_kind":"reconstructed"}]}
 ```
 
 ### Schema Specification:
@@ -119,14 +121,32 @@ Fitify Morning Strength | Exercises: 2
 * `exercises`: array of exercise segment objects:
   * `segment_index`: `int` (0-based index corresponding to the segment in `ExerciseSessionRecord.segments`, accounting for rest/pause segments)
   * `code`: `string` (original Fitify movement code, e.g. `push_up`, `bo091_front_neck_stretch`)
-  * `name`: `string` (clean display title)
+  * `name`: `string` (catalogue title when available; otherwise the parser's code-derived display label, preserved including Unicode)
   * `timing_kind`: `"reconstructed"` (indicates segment start/end boundaries were reconstructed from session timestamps/durations rather than live hardware sensor triggers)
 
+Downstream readers must not treat reconstructed segment boundaries as measured when correlating heart-rate samples with exercises.
+
+### AndroidX API compatibility
+This app currently compiles against `connect-client:1.1.0-alpha11`. The current [ExerciseSegment reference](https://developer.android.com/reference/kotlin/androidx/health/connect/client/records/ExerciseSegment.md.txt) also describes `weight`, `setIndex` and `rateOfPerceivedExertion`, added in `1.2.0-alpha06`. Those newer fields are not written by this app. The source parser currently has no verified weight or RPE decoder; missing values must not be invented. RPE is the user's perceived exertion, not a catalogue's per-muscle resistance/stretch score.
+
+The [session reference](https://developer.android.com/reference/kotlin/androidx/health/connect/client/records/ExerciseSessionRecord.md.txt) requires segment intervals to stay inside the session and not overlap. The writer constructs sequential intervals and extends the session end when reconstructed segments require it. `segment_index` is this payload's position in the full segment list, including rests; it is not the newer native `setIndex`. Neither record provides a field for Fitify movement codes or per-muscle intensity maps, so downstream consumers resolve codes against their exercise catalogue.
+
+The related [Metadata](https://developer.android.com/reference/kotlin/androidx/health/connect/client/records/metadata/Metadata.md.txt) and [HealthConnectClient](https://developer.android.com/reference/kotlin/androidx/health/connect/client/HealthConnectClient.md.txt) contracts govern identity/version updates and transactional inserts. Session and calorie records for one workout stay together when retrying a failed batch. These JVM checks do not establish end-to-end behavior on a device or another app's import support.
+
 ### Health Connect Notes Safety:
-The combined notes string is strictly kept within Health Connect's 1000-character limit (`MAX_NOTE_LENGTH`). For very large routines with numerous movements, the summary prefix is trimmed and exercises are safely prioritized to preserve parseable JSON.
-Existing sessions synced with earlier versions are automatically enriched with higher `clientRecordVersion` without duplicating records.
-3. Under *Health Connect*, toggle **Sync Fit with Health Connect** to **ON**.
-4. Workouts and active calories will automatically sync to your Google Fit dashboard.
+The [Android ExerciseSessionRecord API](https://developer.android.com/reference/androidx/health/connect/client/records/ExerciseSessionRecord) describes optional notes; it does not document a 1000-character notes limit. The [AndroidX implementation](https://github.com/androidx/androidx/blob/androidx-main/health/connect/connect-client/src/main/java/androidx/health/connect/client/records/ExerciseSessionRecord.kt) does not impose that limit either.
+
+FitifySync uses its own **64 KiB UTF-8 notes budget** and **256 KiB estimated batch budget** to keep individual writes bounded. These are application budgets, not Android API limits. Every exercise identity and repeated set is retained. Only the readable summary may be shortened, without splitting Unicode code points. If the complete payload or an individual workout cannot fit the budget, that workout fails explicitly and stays pending; identities are never silently dropped.
+
+An empty workout includes `exercises: []`. Every listed item requires a unique nonnegative `segment_index`, string `code` and `name`, and `timing_kind: "reconstructed"`. Empty source codes/names remain empty for downstream review; consumers must not guess an identity. The parser validates schema/version and required fields rather than searching for a schema substring. Existing incomplete payloads are rebuilt from the source. Newer unsupported schema versions and existing notes above the reader budget are left untouched and reported.
+
+Normal manual and background sync use stable `fitify_<source id>` client IDs and higher client record versions, following [Health Connect upsert guidance](https://developer.android.com/health-and-fitness/health-connect/write-data). Existing-record lookups are restricted to FitifySync's own data origin and paginated. Complete equivalent session/segment data and expected active-calorie companions are skipped; updates use a version higher than both records. Normal sync does not delete and recreate records.
+
+Writes are bounded batches. If a batch fails, retries keep each workout's session and calorie records together. A failed workout construction does not discard earlier queued workouts. New, updated, already-current and failed counts are separate, and a workout is marked synced only after confirmed insertion. A failed existing-record read prevents writes rather than guessing record versions. Writing to Health Connect alone does not guarantee display in any other app.
+
+The supported session source is Fitify's modern Firestore cache. Unverified legacy layouts fail explicitly: the previous placeholder fallback that invented current timestamps, 15-minute durations and 100-calorie workouts has been removed. A real legacy decoder requires a verified schema and fixture.
+
+
 
 ---
 

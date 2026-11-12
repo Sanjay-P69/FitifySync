@@ -1,6 +1,5 @@
 package com.fitifysync.app.data.parser
 
-import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
 import com.fitifysync.app.data.model.FitifyExerciseDetail
@@ -19,8 +18,6 @@ object FitifyDatabaseParser {
      * and maps nested exercises and rest intervals.
      */
     fun parseWorkouts(dbFileOrDir: File): List<FitifyWorkout> {
-        val workouts = mutableListOf<FitifyWorkout>()
-
         val files = if (dbFileOrDir.isDirectory) {
             dbFileOrDir.listFiles()?.toList() ?: emptyList()
         } else {
@@ -55,39 +52,19 @@ object FitifyDatabaseParser {
             try {
                 Log.i(TAG, "Parsing modern Fitify Firestore database: ${firestoreFile.name}")
                 val firestoreWorkouts = parseFirestoreDatabase(firestoreFile, catalogMap)
-                if (firestoreWorkouts.isNotEmpty()) {
-                    Log.i(TAG, "Successfully extracted ${firestoreWorkouts.size} clean workout sessions.")
-                    return firestoreWorkouts.sortedByDescending { it.startTime }
-                }
+                Log.i(TAG, "Successfully extracted ${firestoreWorkouts.size} source workout sessions.")
+                return firestoreWorkouts.sortedByDescending { it.startTime }
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing Firestore database", e)
+                throw IllegalStateException("Could not read the Fitify session database; no workouts were synthesized.", e)
             }
         }
 
-        // 3. Fallback: Parse traditional SQLite tables
-        val candidateSqliteFiles = files.filter {
-            it.isFile && it.length() > 0 &&
-                    !it.name.endsWith("-wal") &&
-                    !it.name.endsWith("-shm") &&
-                    !it.name.endsWith("-journal") &&
-                    !it.name.startsWith("firestore")
+        if (files.any { it.isFile && it.length() > 0 && !it.name.endsWith("-wal") && !it.name.endsWith("-shm") && !it.name.endsWith("-journal") }) {
+            throw UnsupportedOperationException("No supported Fitify session database was found. Legacy layouts require a verified decoder; no workouts were synthesized.")
         }
-
-        for (sqliteFile in candidateSqliteFiles) {
-            try {
-                val extracted = parseLegacySqlite(sqliteFile)
-                if (extracted.isNotEmpty()) {
-                    Log.i(TAG, "Extracted ${extracted.size} sessions from legacy SQLite DB: ${sqliteFile.name}")
-                    workouts.addAll(extracted)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed checking legacy tables in ${sqliteFile.name}", e)
-            }
-        }
-
-        return workouts.sortedByDescending { it.startTime }
+        return emptyList()
     }
-
     private fun loadExerciseCatalog(catalogFile: File, catalogMap: MutableMap<String, String>) {
         SQLiteDatabase.openDatabase(catalogFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             val cursor = db.rawQuery("SELECT code, title FROM exercises", null)
@@ -247,72 +224,7 @@ object FitifyDatabaseParser {
         }
     }
 
-    private fun parseLegacySqlite(dbFile: File): List<FitifyWorkout> {
-        val workouts = mutableListOf<FitifyWorkout>()
-        var db: SQLiteDatabase? = null
-        try {
-            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-            val tables = getTableNames(db)
-            for (table in tables) {
-                val lower = table.lowercase()
-                if (lower.contains("history") || lower.contains("workout") || lower.contains("session")) {
-                    workouts.addAll(extractFromLegacyTable(db, table))
-                }
-            }
-        } finally {
-            try { db?.close() } catch (_: Exception) {}
-        }
-        return workouts
-    }
 
-    private fun getTableNames(db: SQLiteDatabase): List<String> {
-        val tableList = mutableListOf<String>()
-        val cursor = db.rawQuery(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_%'",
-            null
-        )
-        cursor.use {
-            while (it.moveToNext()) {
-                tableList.add(it.getString(0))
-            }
-        }
-        return tableList
-    }
-
-    private fun extractFromLegacyTable(db: SQLiteDatabase, tableName: String): List<FitifyWorkout> {
-        val list = mutableListOf<FitifyWorkout>()
-        val cursor = db.rawQuery("PRAGMA table_info(\"$tableName\")", null)
-        val cols = mutableListOf<String>()
-        cursor.use {
-            while (it.moveToNext()) {
-                val idx = it.getColumnIndex("name")
-                if (idx != -1) cols.add(it.getString(idx).lowercase())
-            }
-        }
-
-        if (!cols.any { it.contains("time") || it.contains("date") }) return emptyList()
-
-        val dataCursor = db.rawQuery("SELECT * FROM \"$tableName\"", null)
-        dataCursor.use { c ->
-            while (c.moveToNext()) {
-                val title = "Fitify Workout"
-                val now = Instant.now()
-                list.add(
-                    FitifyWorkout(
-                        id = "legacy_${c.position}",
-                        title = title,
-                        workoutType = "Workout",
-                        startTime = now.minusSeconds(900),
-                        endTime = now,
-                        durationSeconds = 900L,
-                        caloriesBurned = 100.0,
-                        exercises = emptyList()
-                    )
-                )
-            }
-        }
-        return list
-    }
 }
 
 /**

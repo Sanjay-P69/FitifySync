@@ -34,7 +34,7 @@ class FitifyNotesPayloadTest {
         )
 
         assertTrue(notes.startsWith("Fitify Morning Routine | Exercises: 2\n\n"))
-        assertTrue(notes.length <= FitifyNotesBuilder.MAX_NOTE_LENGTH)
+        assertTrue(notes.toByteArray(Charsets.UTF_8).size <= FitifyNotesBuilder.MAX_NOTES_UTF8_BYTES)
 
         val parsed = FitifyNotesBuilder.parsePayload(notes)
         assertNotNull("Payload should be parsed from notes", parsed)
@@ -59,13 +59,13 @@ class FitifyNotesPayloadTest {
             exerciseCount = 0,
             items = emptyList()
         )
-        assertEquals("Fitify Empty Workout | Exercises: 0", notes)
-        assertNull(FitifyNotesBuilder.parsePayload(notes))
+        assertTrue(notes.startsWith("Fitify Empty Workout | Exercises: 0\n\n"))
+        assertTrue(FitifyNotesBuilder.parsePayload(notes)!!.exercises.isEmpty())
     }
 
     @Test
     fun testBuildNotesOversizedSafety() {
-        // Create 35 exercise items that would easily exceed 1000 characters
+        // A long routine must keep every identity instead of trimming to 1000 characters.
         val largeItems = (0 until 35).map { idx ->
             ExerciseSegmentNoteItem(
                 segmentIndex = idx * 2 + 1,
@@ -81,12 +81,12 @@ class FitifyNotesPayloadTest {
             items = largeItems
         )
 
-        assertTrue("Note must never exceed 1000 chars", notes.length <= FitifyNotesBuilder.MAX_NOTE_LENGTH)
+        assertTrue("Notes must fit the application transport budget", notes.toByteArray(Charsets.UTF_8).size <= FitifyNotesBuilder.MAX_NOTES_UTF8_BYTES)
         val parsed = FitifyNotesBuilder.parsePayload(notes)
         assertNotNull("Should still contain a valid parseable JSON payload", parsed)
         assertEquals("fitifysync.exercise_segments", parsed!!.schema)
-        assertTrue("Should have trimmed items to fit within limit", parsed.exercises.isNotEmpty())
-        assertTrue("Trimmed count should be less than 35", parsed.exercises.size < 35)
+        assertTrue("All items should be available", parsed.exercises.isNotEmpty())
+        assertEquals("Every exercise identity must survive", 35, parsed.exercises.size)
     }
 
     @Test
@@ -106,7 +106,7 @@ class FitifyNotesPayloadTest {
             items = items
         )
 
-        assertTrue(notes.length <= FitifyNotesBuilder.MAX_NOTE_LENGTH)
+        assertTrue(notes.toByteArray(Charsets.UTF_8).size <= FitifyNotesBuilder.MAX_NOTES_UTF8_BYTES)
         val parsed = FitifyNotesBuilder.parsePayload(notes)
         assertNotNull(parsed)
         assertEquals("custom_\"quote\"_and_\\slash", parsed!!.exercises[0].code)

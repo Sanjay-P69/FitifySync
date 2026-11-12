@@ -58,7 +58,7 @@ class SyncWorker(
         }
 
         val syncResult = healthConnectManager.syncWorkouts(workouts)
-        Log.i(TAG, "Background sync completed: ${syncResult.newlySynced} new workouts synced.")
+        Log.i(TAG, syncResult.summaryText)
 
         // 5. Clean up temporary database dump
         try {
@@ -67,14 +67,14 @@ class SyncWorker(
         } catch (_: Exception) {}
 
         // 6. Notify user if new sessions synced
-        if (syncResult.newlySynced > 0) {
+        if (syncResult.newlySynced > 0 || syncResult.updatedCount > 0 || syncResult.failedCount > 0) {
             sendNotification(
-                "Fitify Sync Complete",
-                "Successfully synced ${syncResult.newlySynced} workout session(s) to Health Connect, Samsung Health & Google Fit."
+                if (syncResult.failedCount == 0) "Fitify Sync Complete" else "Fitify Sync Incomplete",
+                syncResult.summaryText
             )
         }
 
-        Result.success()
+        if (syncResult.failedCount > 0) Result.retry() else Result.success()
     }
 
     private fun sendNotification(title: String, message: String) {
