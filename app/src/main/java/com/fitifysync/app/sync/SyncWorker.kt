@@ -40,41 +40,40 @@ class SyncWorker(
 
         val dumpDir = dumpResult.getOrThrow()
 
-        // 3. Parse workout sessions
-        val workouts = FitifyDatabaseParser.parseWorkouts(dumpDir)
-        Log.i(TAG, "Parsed ${workouts.size} workouts from Fitify database.")
-
-        if (workouts.isEmpty()) {
-            try { dumpDir.deleteRecursively() } catch (_: Exception) {}
-            return@withContext Result.success()
-        }
-
-        // 4. Sync to Health Connect
-        val healthConnectManager = HealthConnectManager(applicationContext)
-        if (!healthConnectManager.hasAllPermissions()) {
-            Log.w(TAG, "Health Connect permissions missing during background sync.")
-            try { dumpDir.deleteRecursively() } catch (_: Exception) {}
-            return@withContext Result.failure()
-        }
-
-        val syncResult = healthConnectManager.syncWorkouts(workouts)
-        Log.i(TAG, syncResult.summaryText)
-
-        // 5. Clean up temporary database dump
         try {
-            RootRunner.runSu("rm -rf /data/local/tmp/fitify_dump")
-            dumpDir.deleteRecursively()
-        } catch (_: Exception) {}
-
-        // 6. Notify user if new sessions synced
-        if (syncResult.newlySynced > 0 || syncResult.updatedCount > 0 || syncResult.failedCount > 0) {
-            sendNotification(
-                if (syncResult.failedCount == 0) "Fitify Sync Complete" else "Fitify Sync Incomplete",
-                syncResult.summaryText
-            )
+            val workouts = FitifyDatabaseParser.parseWorkouts(dumpDir)
+            Log.i(TAG, "Parsed ${workouts.size} workouts from Fitify database.")
+            if (workouts.isEmpty()) return@withContext Result.success()
+            val manager = HealthConnectManager(applicationContext)
+            if (!manager.hasAllPermissions()) {
+                sendNotification("Fitify Sync Needs Attention", "Allow FitifySync's Health Connect permissions before syncing.")
+                return@withContext Result.failure()
+            }
+            val syncResult = manager.syncWorkouts(workouts)
+            Log.i(TAG, syncResult.summaryText)
+            if (syncResult.newlySynced > 0 || syncResult.updatedCount > 0 || syncResult.failedCount > 0) {
+                sendNotification(if (syncResult.failedCount == 0) "Fitify Sync Complete" else "Fitify Sync Incomplete", syncResult.summaryText)
+            }
+            syncOutcome(syncResult)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e(TAG, "Background sync failed", error)
+            sendNotification("Fitify Sync Needs Attention", error.message ?: "Could not read the Fitify source. Open FitifySync to retry.")
+            if (isRetryableFailure(error)) Result.retry() else Result.failure()
+        } finally {
+            try { dumpDir.deleteRecursively() } catch (_: Exception) {}
         }
+    }
 
-        if (syncResult.failedCount > 0) Result.retry() else Result.success()
+    companion object {
+        internal fun syncOutcome(sync: com.fitifysync.app.data.healthconnect.SyncResult): Result =
+            if (sync.retryableFailedCount > 0) Result.retry() else if (sync.failedCount > 0) Result.failure() else Result.success()
+
+        internal fun isRetryableFailure(error: Throwable): Boolean = generateSequence(error) { it.cause }.any {
+            it is java.io.IOException || it is android.os.RemoteException ||
+                it is android.database.sqlite.SQLiteDatabaseLockedException || it is android.database.sqlite.SQLiteDiskIOException
+        }
     }
 
     private fun sendNotification(title: String, message: String) {

@@ -188,6 +188,7 @@ object FitifyDatabaseParser {
                                 endTime = endTime,
                                 durationSeconds = calculatedDuration,
                                 caloriesBurned = caloriesBurned,
+                                caloriesKnown = fields["calories"] is Number,
                                 exercises = exerciseList,
                                 rawNotes = "Fitify ${resolvedTitle} | Exercises: ${exerciseList.size}",
                                 isSynced = false

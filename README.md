@@ -144,6 +144,8 @@ Normal manual and background sync use stable `fitify_<source id>` client IDs and
 
 Writes are bounded batches. If a batch fails, retries keep each workout's session and calorie records together. A failed workout construction does not discard earlier queued workouts. New, updated, already-current and failed counts are separate, and a workout is marked synced only after confirmed insertion. A failed existing-record read prevents writes rather than guessing record versions. Writing to Health Connect alone does not guarantee display in any other app.
 
+Existing-record scans have an open lower time bound, independent of new source timestamps, so corrections can find earlier exports. Missing or invalid calorie estimates preserve the existing companion; an explicit valid zero removes stale calories after the session write, before reporting success. Background sync retries transient failures, reports permanent preparation/source failures without immediate retry loops, and cleans its temporary dump even after parser rejection.
+
 The supported session source is Fitify's modern Firestore cache. Unverified legacy layouts fail explicitly: the previous placeholder fallback that invented current timestamps, 15-minute durations and 100-calorie workouts has been removed. A real legacy decoder requires a verified schema and fixture.
 
 

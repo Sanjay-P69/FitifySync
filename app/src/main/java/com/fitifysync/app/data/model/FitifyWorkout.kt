@@ -32,8 +32,10 @@ data class FitifyWorkout(
     var isSynced: Boolean = false,
     var avgHeartRate: Int? = null,
     var minHeartRate: Int? = null,
-    var maxHeartRate: Int? = null
+    var maxHeartRate: Int? = null,
+    val caloriesKnown: Boolean = true
 ) {
+    val hasKnownCalories: Boolean get() = caloriesKnown && caloriesBurned.isFinite() && caloriesBurned >= 0.0
     /**
      * Maps Fitify training categories to universal Health Connect ExerciseSessionRecord types
      * to guarantee compatibility with all nested ExerciseSegment types.

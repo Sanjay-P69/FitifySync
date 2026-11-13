@@ -2,7 +2,7 @@ package com.fitifysync.app.data.healthconnect
 
 import kotlinx.coroutines.CancellationException
 
-internal data class PreparedSyncRecords<T>(val records: List<T>, val estimatedBytes: Int)
+internal data class PreparedSyncRecords<T>(val records: List<T>, val estimatedBytes: Int, val afterWrite: suspend () -> Unit = {})
 
 internal class SyncWriteBatch<T>(
     private val insertRecords: suspend (List<T>) -> Unit,
@@ -20,6 +20,8 @@ internal class SyncWriteBatch<T>(
     var alreadySynced = 0
         private set
     var failedCount = 0
+        private set
+    var retryableFailedCount = 0
         private set
     var errorMessage: String? = null
         private set
@@ -56,7 +58,6 @@ internal class SyncWriteBatch<T>(
         estimatedBytes = 0
         try {
             insertRecords(batch.flatMap { it.prepared.records })
-            batch.forEach(::confirm)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -68,14 +69,26 @@ internal class SyncWriteBatch<T>(
                     throw cancelled
                 } catch (error: Exception) {
                     failedCount++
+                    if (error !is SecurityException && error !is IllegalArgumentException && error !is UnsupportedOperationException) retryableFailedCount++
                     errorMessage = error.localizedMessage
                 }
             }
+            return
         }
+        for (workout in batch) confirm(workout)
     }
 
-    private fun confirm(workout: Pending<T>) {
-        workout.markSynced(true)
-        if (workout.isUpdate) updatedCount++ else newlySynced++
+    private suspend fun confirm(workout: Pending<T>) {
+        try {
+            workout.prepared.afterWrite()
+            workout.markSynced(true)
+            if (workout.isUpdate) updatedCount++ else newlySynced++
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            failedCount++
+            if (error !is SecurityException && error !is IllegalArgumentException && error !is UnsupportedOperationException) retryableFailedCount++
+            errorMessage = error.localizedMessage
+        }
     }
 }

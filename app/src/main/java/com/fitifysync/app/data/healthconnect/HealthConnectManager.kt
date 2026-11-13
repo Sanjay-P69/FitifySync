@@ -32,7 +32,8 @@ data class SyncResult(
     val alreadySynced: Int,
     val failedCount: Int,
     val errorMessage: String? = null,
-    val updatedCount: Int = 0
+    val updatedCount: Int = 0,
+    val retryableFailedCount: Int = 0
 ) {
     val summaryText: String
         get() = "Health Connect: $newlySynced new, $updatedCount updated, $alreadySynced already current, $failedCount failed."
@@ -50,14 +51,14 @@ data class ExistingSessionStatus(
         return clientRecordVersion + 1L
     }
 
-    fun matches(expected: ExerciseSessionRecord, expectedCalories: ActiveCaloriesBurnedRecord?): Boolean {
+    fun matches(expected: ExerciseSessionRecord, expectedCalories: ActiveCaloriesBurnedRecord?, caloriesKnown: Boolean = true): Boolean {
         val session = session ?: return false
         val payload = FitifyNotesBuilder.parsePayload(session.notes) ?: return false
         if (payload != FitifyNotesBuilder.parsePayload(expected.notes)) return false
         if (session.startTime != expected.startTime || session.endTime != expected.endTime ||
             session.startZoneOffset != expected.startZoneOffset || session.endZoneOffset != expected.endZoneOffset ||
             session.title != expected.title || session.exerciseType != expected.exerciseType || session.segments != expected.segments) return false
-        if (expectedCalories == null) return true
+        if (expectedCalories == null) return !caloriesKnown || calories == null
         val existingCalories = calories ?: return false
         return existingCalories.startTime == expectedCalories.startTime && existingCalories.endTime == expectedCalories.endTime &&
             existingCalories.energy == expectedCalories.energy && existingCalories.startZoneOffset == expectedCalories.startZoneOffset &&
@@ -127,7 +128,7 @@ class HealthConnectManager(private val context: Context) {
      */
     suspend fun getExistingSessions(workouts: List<FitifyWorkout>): Map<String, ExistingSessionStatus> = withContext(Dispatchers.IO) {
         if (workouts.isEmpty()) return@withContext emptyMap()
-        val filter = TimeRangeFilter.after(workouts.minOf { it.startTime })
+        val filter = existingRecordFilter()
         val origin = setOf(DataOrigin(context.packageName))
         val existing = mutableMapOf<String, ExistingSessionStatus>()
         var pageToken: String? = null
@@ -143,7 +144,7 @@ class HealthConnectManager(private val context: Context) {
                 val id = record.metadata.clientRecordId ?: continue
                 existing[id] = ExistingSessionStatus(record)
             }
-            pageToken = response.pageToken
+            pageToken = response.pageToken?.takeIf { it.isNotEmpty() }
         } while (pageToken != null)
         do {
             val response = healthConnectClient.readRecords(ReadRecordsRequest(
@@ -159,7 +160,7 @@ class HealthConnectManager(private val context: Context) {
                 val sessionId = id.removeSuffix("_cal")
                 existing[sessionId] = existing[sessionId]?.copy(calories = record) ?: ExistingSessionStatus(null, record)
             }
-            pageToken = response.pageToken
+            pageToken = response.pageToken?.takeIf { it.isNotEmpty() }
         } while (pageToken != null)
         existing
     }
@@ -219,7 +220,7 @@ class HealthConnectManager(private val context: Context) {
             } catch (error: Exception) {
                 workouts.forEach { it.isSynced = false }
                 Log.w(TAG, "Could not verify existing FitifySync records", error)
-                return@withContext SyncResult(workouts.size, 0, 0, workouts.size, "Could not verify existing Health Connect records; no records were written.")
+                return@withContext SyncResult(workouts.size, 0, 0, workouts.size, "Could not verify existing Health Connect records; no records were written.",retryableFailedCount=if(error is SecurityException || error is IllegalArgumentException) 0 else workouts.size)
             }
             val batch = SyncWriteBatch<Record>({ healthConnectClient.insertRecords(it) })
             for (workout in workouts) {
@@ -235,7 +236,13 @@ class HealthConnectManager(private val context: Context) {
                     val prepared = prepareWorkoutRecords(workout, targetVersion)
                     val session = prepared.records.first() as ExerciseSessionRecord
                     val calories = prepared.records.filterIsInstance<ActiveCaloriesBurnedRecord>().singleOrNull()
-                    if (existing?.matches(session, calories) == true) null else prepared
+                    if (existing?.matches(session, calories,workout.hasKnownCalories) == true) null else prepared.copy(afterWrite={
+                        val staleCalories=existing?.calories
+                        if(workout.hasKnownCalories && calories == null && staleCalories != null) {
+                            healthConnectClient.deleteRecords(ActiveCaloriesBurnedRecord::class,
+                                recordIdsList=listOf(staleCalories.metadata.id),clientRecordIdsList=emptyList())
+                        }
+                    })
                 }
             }
             batch.flush()
@@ -245,7 +252,8 @@ class HealthConnectManager(private val context: Context) {
                 alreadySynced = batch.alreadySynced,
                 failedCount = batch.failedCount,
                 errorMessage = batch.errorMessage,
-                updatedCount = batch.updatedCount
+                updatedCount = batch.updatedCount,
+                retryableFailedCount = batch.retryableFailedCount
             )
         }
     }
@@ -277,7 +285,7 @@ class HealthConnectManager(private val context: Context) {
             session(ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT)
         }
         val records = mutableListOf<Record>(session)
-        if (workout.caloriesBurned > 0) records.add(ActiveCaloriesBurnedRecord(
+        if (workout.hasKnownCalories && workout.caloriesBurned > 0) records.add(ActiveCaloriesBurnedRecord(
             startTime = workout.startTime,
             startZoneOffset = startOffset,
             endTime = effectiveEndTime,
@@ -291,6 +299,7 @@ class HealthConnectManager(private val context: Context) {
     }
     companion object {
         private val syncMutex = Mutex()
+        internal fun existingRecordFilter(): TimeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(Long.MAX_VALUE))
         internal fun buildExerciseSegments(workout: FitifyWorkout): SegmentBuildResult {
             if (workout.exercises.isEmpty()) return SegmentBuildResult(emptyList(), emptyList())
 

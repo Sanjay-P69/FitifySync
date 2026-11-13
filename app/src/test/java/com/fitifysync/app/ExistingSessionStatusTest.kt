@@ -67,4 +67,11 @@ class ExistingSessionStatusTest {
     fun exhaustedRecordVersionCannotWrapAround() {
         ExistingSessionStatus(session(version = Long.MAX_VALUE)).nextClientRecordVersion()
     }
+
+    @Test
+    fun missingCaloriesPreserveTheCompanionButExplicitZeroRequiresCleanup() {
+        val existing = ExistingSessionStatus(session(), calories(100.0))
+        assertFalse(existing.matches(session(), null))
+        assertTrue(existing.matches(session(), null, caloriesKnown = false))
+    }
 }
