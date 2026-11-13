@@ -96,7 +96,7 @@ class MainViewModel(
                 )
             }
 
-            val result = repository.extractAndSyncWorkouts(wipePreviousFirst = true)
+            val result = repository.extractAndSyncWorkouts()
 
             result.onSuccess { pair ->
                 val (workouts, summary) = pair
@@ -106,14 +106,10 @@ class MainViewModel(
                         isSyncing = false,
                         workouts = workouts,
                         stats = computedStats,
-                        statusMessage = if (summary.errorMessage != null) {
-                            "Sync partial/error: ${summary.errorMessage}"
-                        } else {
-                            "Success: ${summary.newlySynced} sessions synced with detailed segments."
-                        }
+                        statusMessage = summary.summaryText + (summary.errorMessage?.let { message -> " $message" } ?: "")
                     )
                 }
-                _events.emit(UiEvent.ShowToast("Synced ${summary.newlySynced} workout sessions!"))
+                _events.emit(UiEvent.ShowToast(summary.summaryText, isLong = summary.failedCount > 0))
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(

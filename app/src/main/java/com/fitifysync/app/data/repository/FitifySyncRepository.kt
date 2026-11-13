@@ -13,6 +13,7 @@ import com.fitifysync.app.data.parser.FitifyDatabaseParser
 import com.fitifysync.app.data.root.RootRunner
 import com.fitifysync.app.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileWriter
@@ -24,7 +25,7 @@ interface FitifySyncRepository {
     fun isHealthConnectAvailable(): Boolean
     suspend fun hasHealthConnectPermissions(): Boolean
     fun getRequiredHealthPermissions(): Set<String>
-    suspend fun extractAndSyncWorkouts(wipePreviousFirst: Boolean = true): Result<Pair<List<FitifyWorkout>, SyncResult>>
+    suspend fun extractAndSyncWorkouts(wipePreviousFirst: Boolean = false): Result<Pair<List<FitifyWorkout>, SyncResult>>
     suspend fun exportWorkoutsToCsv(workouts: List<FitifyWorkout>): Result<File>
     fun setPeriodicSync(enabled: Boolean)
 }
@@ -76,7 +77,7 @@ class DefaultFitifySyncRepository(
                             workout.maxHeartRate = hr.third
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
 
                 // 5. Cleanup dump directory
                 try {
@@ -84,6 +85,8 @@ class DefaultFitifySyncRepository(
                 } catch (_: Exception) {}
 
                 Result.success(Pair(parsedWorkouts, syncResult))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Result.failure(e)
             }
